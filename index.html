@@ -18,6 +18,7 @@
             color-scheme: dark; }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--fg);
          font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
          padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
@@ -59,37 +60,39 @@
   </div>
   <div class="updated" id="updated"></div>
 </header>
-
+ 
 <form id="keyForm" hidden>
   <label for="key"><strong>Digitransit API key</strong><br>
     <span class="code">Saved only on this phone. Get one at digitransit.fi → Developers → API registration.</span></label>
   <input id="key" autocomplete="off" placeholder="digitransit-subscription-key">
   <button type="submit">Save and show departures</button>
 </form>
-
+ 
 <ul id="list"></ul>
 <p class="note" id="note">● green = real-time estimate · updates every 30 s
   <button class="link" id="resetKey" type="button">Change API key</button></p>
-
+ 
 <script>
 const STOP_CODE = "H2550";
+const STOP_NAME = "Tynnyrintekijänkatu";
 const API = "https://api.digitransit.fi/routing/v2/hsl/gtfs/v1";
 const REFRESH_MS = 30000;
-
+ 
 const $ = id => document.getElementById(id);
 const getKey = () => { try { return localStorage.getItem("dtKey") || ""; } catch { return ""; } };
 const setKey = k => { try { localStorage.setItem("dtKey", k); } catch {} };
-
-const QUERY = `{
-  stops(name: "${STOP_CODE}") {
-    gtfsId name code
+ 
+const FIELDS = `gtfsId name code desc
     stoptimesWithoutPatterns(numberOfDepartures: 15, omitNonPickups: true) {
       serviceDay scheduledDeparture realtimeDeparture realtime headsign
       trip { route { shortName } }
-    }
-  }
+    }`;
+const QUERY = `{
+  byCode: stops(name: "${STOP_CODE}") { ${FIELDS} }
+  byName: stops(name: "${STOP_NAME}") { ${FIELDS} }
 }`;
-
+const norm = c => (c || "").replace(/\s/g, "").toUpperCase();
+ 
 async function load() {
   const key = getKey();
   if (!key) { $("keyForm").hidden = false; return; }
@@ -103,14 +106,20 @@ async function load() {
     if (res.status === 401 || res.status === 403) throw new Error("API key was rejected. Tap “Change API key”.");
     if (!res.ok) throw new Error("Server answered " + res.status);
     const json = await res.json();
-    const stop = (json.data?.stops || []).find(s => s.code === STOP_CODE);
-    if (!stop) throw new Error("Stop " + STOP_CODE + " not found.");
+    if (json.errors && !json.data) throw new Error(json.errors[0].message);
+    const all = [...(json.data?.byCode || []), ...(json.data?.byName || [])];
+    const stop = all.find(s => norm(s.code) === norm(STOP_CODE));
+    if (!stop) {
+      const found = (json.data?.byName || []).map(s => `${s.name} – ${s.code || "?"}${s.desc ? " (" + s.desc + ")" : ""}`);
+      throw new Error("Stop " + STOP_CODE + " not found." +
+        (found.length ? "<br><br>HSL has these stops named " + STOP_NAME + ":<br>" + found.join("<br>") : ""));
+    }
     render(stop);
   } catch (e) {
     $("list").innerHTML = `<li><span></span><span class="err">${e.message}</span><span></span></li>`;
   }
 }
-
+ 
 function render(stop) {
   $("stopName").textContent = stop.name;
   $("stopCode").textContent = "HSL · " + stop.code;
@@ -129,7 +138,7 @@ function render(stop) {
   $("list").innerHTML = rows.join("") || `<li><span></span><span>No departures soon.</span><span></span></li>`;
   $("updated").textContent = "Updated " + new Date().toLocaleTimeString("fi-FI", { hour: "2-digit", minute: "2-digit" });
 }
-
+ 
 $("keyForm").addEventListener("submit", e => {
   e.preventDefault();
   const k = $("key").value.trim();
@@ -137,9 +146,10 @@ $("keyForm").addEventListener("submit", e => {
 });
 $("resetKey").addEventListener("click", () => { setKey(""); $("list").innerHTML = ""; $("keyForm").hidden = false; });
 document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
-
+ 
 load();
 setInterval(load, REFRESH_MS);
 </script>
 </body>
 </html>
+
