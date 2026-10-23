@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="fi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b2a4a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Pysäkki H2159</title>
+<style>
+  :root {
+    --bg: #f3f6f9; --card: #ffffff; --fg: #10202f; --muted: #5b6b7a;
+    --line: #dde4eb; --accent: #007ac9; --live: #138a43; --late: #c2410c;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0d1620; --card: #15212d; --fg: #e8eef4; --muted: #94a3b2;
+            --line: #233243; --accent: #4fb3f0; --live: #4ade80; --late: #fb923c;
+            color-scheme: dark; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+                  max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+  header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+           padding-block: 8px 14px; }
+  h1 { margin: 0; font-size: 1.35rem; text-wrap: balance; }
+  .code { color: var(--muted); font-size: .9rem; }
+  .updated { color: var(--muted); font-size: .8rem; white-space: nowrap; }
+  ul { list-style: none; margin: 0; padding: 0; background: var(--card);
+       border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  li { display: grid; grid-template-columns: 3.6rem 1fr auto; align-items: center; gap: 12px;
+       padding: 12px 14px; border-top: 1px solid var(--line); }
+  li:first-child { border-top: 0; }
+  .line { font-weight: 700; font-size: 1.15rem; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .dest { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .time { text-align: right; font-variant-numeric: tabular-nums; }
+  .mins { font-weight: 700; font-size: 1.15rem; }
+  .clock { display: block; color: var(--muted); font-size: .8rem; }
+  .rt .mins { color: var(--live); }
+  .rt .mins::before { content: "● "; font-size: .6rem; vertical-align: middle; }
+  .note { color: var(--muted); font-size: .85rem; margin-top: 12px; }
+  .err { color: var(--late); }
+  form { display: grid; gap: 10px; background: var(--card); border: 1px solid var(--line);
+         border-radius: 12px; padding: 16px; }
+  input { font: inherit; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line);
+          background: var(--bg); color: var(--fg); width: 100%; }
+  button { font: inherit; font-weight: 600; padding: 10px 14px; border-radius: 8px; border: 0;
+           background: var(--accent); color: #fff; cursor: pointer; }
+  .link { background: none; color: var(--muted); padding: 0; font-weight: 400;
+          text-decoration: underline; font-size: .8rem; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 id="stopName">Pysäkki H2159</h1>
+    <div class="code" id="stopCode">HSL · H2159</div>
+  </div>
+  <div class="updated" id="updated"></div>
+</header>
+
+<form id="keyForm" hidden>
+  <label for="key"><strong>Digitransit API key</strong><br>
+    <span class="code">Saved only on this phone. Get one at digitransit.fi → Developers → API registration.</span></label>
+  <input id="key" autocomplete="off" placeholder="digitransit-subscription-key">
+  <button type="submit">Save and show departures</button>
+</form>
+
+<ul id="list"></ul>
+<p class="note" id="note">● green = real-time estimate · updates every 30 s
+  <button class="link" id="resetKey" type="button">Change API key</button></p>
+
+<script>
+const STOP_CODE = "H2159";
+const API = "https://api.digitransit.fi/routing/v2/hsl/gtfs/v1";
+const REFRESH_MS = 30000;
+
+const $ = id => document.getElementById(id);
+const getKey = () => { try { return localStorage.getItem("dtKey") || ""; } catch { return ""; } };
+const setKey = k => { try { localStorage.setItem("dtKey", k); } catch {} };
+
+const QUERY = `{
+  stops(name: "${STOP_CODE}") {
+    gtfsId name code
+    stoptimesWithoutPatterns(numberOfDepartures: 15, omitNonPickups: true) {
+      serviceDay scheduledDeparture realtimeDeparture realtime headsign
+      trip { route { shortName } }
+    }
+  }
+}`;
+
+async function load() {
+  const key = getKey();
+  if (!key) { $("keyForm").hidden = false; return; }
+  $("keyForm").hidden = true;
+  try {
+    const res = await fetch(API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "digitransit-subscription-key": key },
+      body: JSON.stringify({ query: QUERY })
+    });
+    if (res.status === 401 || res.status === 403) throw new Error("API key was rejected. Tap “Change API key”.");
+    if (!res.ok) throw new Error("Server answered " + res.status);
+    const json = await res.json();
+    const stop = (json.data?.stops || []).find(s => s.code === STOP_CODE);
+    if (!stop) throw new Error("Stop " + STOP_CODE + " not found.");
+    render(stop);
+  } catch (e) {
+    $("list").innerHTML = `<li><span></span><span class="err">${e.message}</span><span></span></li>`;
+  }
+}
+
+function render(stop) {
+  $("stopName").textContent = stop.name;
+  $("stopCode").textContent = "HSL · " + stop.code;
+  const now = Date.now() / 1000;
+  const rows = stop.stoptimesWithoutPatterns.map(st => {
+    const t = st.serviceDay + (st.realtime ? st.realtimeDeparture : st.scheduledDeparture);
+    const mins = Math.floor((t - now) / 60);
+    const clock = new Date(t * 1000).toLocaleTimeString("fi-FI", { hour: "2-digit", minute: "2-digit" });
+    const label = mins <= 0 ? "Now" : mins + " min";
+    return `<li class="${st.realtime ? "rt" : ""}">
+      <span class="line">${st.trip.route.shortName}</span>
+      <span class="dest">${st.headsign || ""}</span>
+      <span class="time"><span class="mins">${label}</span><span class="clock">${clock}</span></span>
+    </li>`;
+  });
+  $("list").innerHTML = rows.join("") || `<li><span></span><span>No departures soon.</span><span></span></li>`;
+  $("updated").textContent = "Updated " + new Date().toLocaleTimeString("fi-FI", { hour: "2-digit", minute: "2-digit" });
+}
+
+$("keyForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const k = $("key").value.trim();
+  if (k) { setKey(k); load(); }
+});
+$("resetKey").addEventListener("click", () => { setKey(""); $("list").innerHTML = ""; $("keyForm").hidden = false; });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
+
+load();
+setInterval(load, REFRESH_MS);
+</script>
+</body>
+</html>
